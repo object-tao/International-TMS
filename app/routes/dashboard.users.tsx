@@ -1,0 +1,65 @@
+import { env } from "cloudflare:workers";
+import { Form, useNavigation } from "react-router";
+import type { Route } from "./+types/dashboard.users";
+import { requireSessionUser } from "../lib/auth.server";
+import { hashPassword } from "../lib/crypto.server";
+import { validateEmail, validatePassword, valueOf, type FieldErrors } from "../lib/validation";
+import { writeAudit } from "../lib/audit.server";
+
+type MemberRow = { membership_id: string; user_id: string; display_name: string; email: string; title: string | null; status: string; roles: string | null; last_login_at: string | null };
+
+export async function loader({ request }: Route.LoaderArgs) {
+  const current = await requireSessionUser(request, "user.view");
+  const members = await env.DB.prepare(`SELECT m.id AS membership_id, u.id AS user_id, u.display_name, u.email, m.title, m.status, u.last_login_at, GROUP_CONCAT(r.name, '、') AS roles FROM memberships m JOIN users u ON u.id = m.user_id LEFT JOIN membership_roles mr ON mr.membership_id = m.id LEFT JOIN roles r ON r.id = mr.role_id WHERE m.organization_id = ? GROUP BY m.id ORDER BY u.display_name`).bind(current.organizationId).all<MemberRow>();
+  const roles = await env.DB.prepare("SELECT id, name FROM roles WHERE organization_id = ? ORDER BY name").bind(current.organizationId).all<{ id: string; name: string }>();
+  return { current, members: members.results, roles: roles.results };
+}
+
+export async function action({ request }: Route.ActionArgs) {
+  const current = await requireSessionUser(request, "user.manage");
+  const form = await request.formData();
+  const intent = valueOf(form, "intent");
+  if (intent === "toggle") {
+    const membershipId = valueOf(form, "membershipId");
+    const membership = await env.DB.prepare("SELECT user_id, status FROM memberships WHERE id = ? AND organization_id = ?").bind(membershipId, current.organizationId).first<{ user_id: string; status: string }>();
+    if (!membership || membership.user_id === current.userId) return { formError: "不能停用当前登录用户" };
+    const next = membership.status === "active" ? "disabled" : "active";
+    await env.DB.prepare("UPDATE memberships SET status = ?, updated_at = ? WHERE id = ? AND organization_id = ?").bind(next, new Date().toISOString(), membershipId, current.organizationId).run();
+    await writeAudit({ request, action: `membership.${next}`, resourceType: "membership", resourceId: membershipId, organizationId: current.organizationId, actorUserId: current.userId });
+    return { success: "用户状态已更新" };
+  }
+
+  const displayName = valueOf(form, "displayName");
+  const email = valueOf(form, "email").toLowerCase();
+  const password = valueOf(form, "password");
+  const title = valueOf(form, "title");
+  const roleId = valueOf(form, "roleId");
+  const errors: FieldErrors = {};
+  if (displayName.length < 2 || displayName.length > 80) errors.displayName = "姓名需要 2-80 个字符";
+  const emailError = validateEmail(email); if (emailError) errors.email = emailError;
+  const passwordError = validatePassword(password); if (passwordError) errors.password = passwordError;
+  const role = await env.DB.prepare("SELECT id FROM roles WHERE id = ? AND organization_id = ?").bind(roleId, current.organizationId).first();
+  if (!role) errors.roleId = "请选择有效角色";
+  if (Object.keys(errors).length) return { errors, values: { displayName, email, title, roleId } };
+  const duplicate = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+  if (duplicate) return { formError: "该邮箱已经存在；跨组织用户关联将在后续版本提供", values: { displayName, email, title, roleId } };
+  const now = new Date().toISOString(), userId = crypto.randomUUID(), membershipId = crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(userId, email, await hashPassword(password), displayName, now, now),
+    env.DB.prepare("INSERT INTO memberships (id, organization_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(membershipId, current.organizationId, userId, title || null, now, now),
+    env.DB.prepare("INSERT INTO membership_roles (membership_id, role_id) VALUES (?, ?)").bind(membershipId, roleId),
+  ]);
+  await writeAudit({ request, action: "user.create", resourceType: "user", resourceId: userId, organizationId: current.organizationId, actorUserId: current.userId, metadata: { email } });
+  return { success: "用户已创建" };
+}
+
+export function meta() { return [{ title: "用户管理 | International TMS" }]; }
+
+export default function Users({ loaderData, actionData }: Route.ComponentProps) {
+  const busy = useNavigation().state !== "idle";
+  return <><header className="page-header"><div><p className="eyebrow">IDENTITY</p><h1>用户管理</h1><p>管理当前组织的成员、岗位和状态。</p></div></header>
+    {(actionData?.success || actionData?.formError) && <div className={`alert ${actionData.formError ? "error" : "success"}`}>{actionData.formError ?? actionData.success}</div>}
+    {loaderData.current.permissions.includes("user.manage") && <section className="panel"><h2>创建用户</h2><Form method="post" className="form-grid compact"><input type="hidden" name="intent" value="create"/><label className="field"><span>姓名</span><input name="displayName" required defaultValue={actionData?.values?.displayName}/>{actionData?.errors?.displayName && <small className="field-error">{actionData.errors.displayName}</small>}</label><label className="field"><span>邮箱</span><input name="email" type="email" required defaultValue={actionData?.values?.email}/>{actionData?.errors?.email && <small className="field-error">{actionData.errors.email}</small>}</label><label className="field"><span>岗位</span><input name="title" defaultValue={actionData?.values?.title}/></label><label className="field"><span>角色</span><select name="roleId" required defaultValue={actionData?.values?.roleId}><option value="">请选择</option>{loaderData.roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>{actionData?.errors?.roleId && <small className="field-error">{actionData.errors.roleId}</small>}</label><label className="field span-2"><span>初始密码</span><input name="password" type="password" required/><small className={actionData?.errors?.password ? "field-error" : ""}>{actionData?.errors?.password ?? "至少 12 位，包含大小写字母和数字"}</small></label><button className="primary" disabled={busy}>创建用户</button></Form></section>}
+    <section className="panel"><h2>组织成员</h2><div className="table-wrap"><table><thead><tr><th>成员</th><th>岗位</th><th>角色</th><th>最近登录</th><th>状态</th><th></th></tr></thead><tbody>{loaderData.members.map(m => <tr key={m.membership_id}><td><strong>{m.display_name}</strong><small>{m.email}</small></td><td>{m.title || "—"}</td><td>{m.roles || "未分配"}</td><td>{m.last_login_at ? new Date(m.last_login_at).toLocaleString("zh-CN") : "从未"}</td><td><span className={`status-pill ${m.status !== "active" ? "off" : ""}`}>{m.status === "active" ? "有效" : "已停用"}</span></td><td>{loaderData.current.permissions.includes("user.manage") && m.user_id !== loaderData.current.userId && <Form method="post"><input type="hidden" name="intent" value="toggle"/><input type="hidden" name="membershipId" value={m.membership_id}/><button className="text-button">{m.status === "active" ? "停用" : "恢复"}</button></Form>}</td></tr>)}</tbody></table></div></section>
+  </>;
+}
