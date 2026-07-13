@@ -45,6 +45,13 @@ export async function action({ request }: Route.ActionArgs) {
   const userId = crypto.randomUUID();
   const membershipId = crypto.randomUUID();
   const roleId = crypto.randomUUID();
+  const referenceSeeds = [
+    ["country", "CN", "中国", "China", 10], ["country", "US", "美国", "United States", 20],
+    ["currency", "CNY", "人民币", "Chinese Yuan", 10], ["currency", "USD", "美元", "US Dollar", 20],
+    ["unit", "KG", "千克", "Kilogram", 10], ["unit", "CBM", "立方米", "Cubic Meter", 20],
+    ["transport_mode", "ROAD", "公路零担", "Road LTL", 10], ["service_level", "STANDARD", "标准服务", "Standard", 10],
+    ["lead_source", "REFERRAL", "客户转介绍", "Referral", 10],
+  ] as const;
   let passwordHash: string;
   try {
     passwordHash = await hashPassword(password);
@@ -60,6 +67,7 @@ export async function action({ request }: Route.ActionArgs) {
       env.DB.prepare("INSERT INTO roles (id, organization_id, code, name, description, is_system, created_at, updated_at) VALUES (?, ?, 'owner', '所有者', '拥有当前组织全部权限', 1, ?, ?)").bind(roleId, organizationId, now, now),
       env.DB.prepare("INSERT INTO role_permissions (role_id, permission_code) SELECT ?, code FROM permissions").bind(roleId),
       env.DB.prepare("INSERT INTO membership_roles (membership_id, role_id) VALUES (?, ?)").bind(membershipId, roleId),
+      ...referenceSeeds.map(([category, code, name, nameEn, sortOrder]) => env.DB.prepare("INSERT INTO reference_data (id, organization_id, category, code, name, name_en, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), organizationId, category, code, name, nameEn, sortOrder, now, now)),
     ]);
   } catch (error) {
     return bootstrapFailure("DATABASE_BATCH", error);
