@@ -16,7 +16,7 @@
 		{
 			"binding": "DB",
 			"database_name": "international-tms",
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "771a2f94-f6bd-4390-b409-069e5cb3e3f5",
 			"migrations_dir": "migrations"
 		}
 	],
