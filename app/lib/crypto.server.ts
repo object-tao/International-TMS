@@ -23,7 +23,7 @@ export async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function hashPassword(password: string, iterations = 210_000): Promise<string> {
+export async function hashPassword(password: string, iterations = 100_000): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
