@@ -5,7 +5,10 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
+  useNavigation,
 } from "react-router";
+import { useEffect } from "react";
 
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -31,6 +34,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const location = useLocation();
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (navigation.state === "idle") document.querySelectorAll<HTMLDetailsElement>("details.expandable[open]").forEach((element) => element.removeAttribute("open"));
+  }, [location.pathname, navigation.state]);
   return <Outlet />;
 }
 
