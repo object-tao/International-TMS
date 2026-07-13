@@ -45,17 +45,43 @@ export async function action({ request }: Route.ActionArgs) {
   const userId = crypto.randomUUID();
   const membershipId = crypto.randomUUID();
   const roleId = crypto.randomUUID();
-  const passwordHash = await hashPassword(password);
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO organizations (id, code, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").bind(organizationId, organizationCode, organizationName, now, now),
-    env.DB.prepare("INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(userId, email, passwordHash, displayName, now, now),
-    env.DB.prepare("INSERT INTO memberships (id, organization_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(membershipId, organizationId, userId, "系统管理员", now, now),
-    env.DB.prepare("INSERT INTO roles (id, organization_id, code, name, description, is_system, created_at, updated_at) VALUES (?, ?, 'owner', '所有者', '拥有当前组织全部权限', 1, ?, ?)").bind(roleId, organizationId, now, now),
-    env.DB.prepare("INSERT INTO role_permissions (role_id, permission_code) SELECT ?, code FROM permissions").bind(roleId),
-    env.DB.prepare("INSERT INTO membership_roles (membership_id, role_id) VALUES (?, ?)").bind(membershipId, roleId),
-  ]);
-  await writeAudit({ request, action: "system.bootstrap", resourceType: "organization", resourceId: organizationId, organizationId, actorUserId: userId });
-  return redirect("/dashboard", { headers: { "Set-Cookie": await createSession(userId, organizationId) } });
+  let passwordHash: string;
+  try {
+    passwordHash = await hashPassword(password);
+  } catch (error) {
+    return bootstrapFailure("PASSWORD_HASH", error);
+  }
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO organizations (id, code, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").bind(organizationId, organizationCode, organizationName, now, now),
+      env.DB.prepare("INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(userId, email, passwordHash, displayName, now, now),
+      env.DB.prepare("INSERT INTO memberships (id, organization_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(membershipId, organizationId, userId, "系统管理员", now, now),
+      env.DB.prepare("INSERT INTO roles (id, organization_id, code, name, description, is_system, created_at, updated_at) VALUES (?, ?, 'owner', '所有者', '拥有当前组织全部权限', 1, ?, ?)").bind(roleId, organizationId, now, now),
+      env.DB.prepare("INSERT INTO role_permissions (role_id, permission_code) SELECT ?, code FROM permissions").bind(roleId),
+      env.DB.prepare("INSERT INTO membership_roles (membership_id, role_id) VALUES (?, ?)").bind(membershipId, roleId),
+    ]);
+  } catch (error) {
+    return bootstrapFailure("DATABASE_BATCH", error);
+  }
+
+  try {
+    await writeAudit({ request, action: "system.bootstrap", resourceType: "organization", resourceId: organizationId, organizationId, actorUserId: userId });
+  } catch (error) {
+    return bootstrapFailure("AUDIT_LOG", error);
+  }
+
+  try {
+    return redirect("/dashboard", { headers: { "Set-Cookie": await createSession(userId, organizationId) } });
+  } catch (error) {
+    return bootstrapFailure("SESSION", error);
+  }
+}
+
+function bootstrapFailure(stage: string, error: unknown) {
+  const incidentId = crypto.randomUUID();
+  console.error("System bootstrap failed", { incidentId, stage, error });
+  return { formError: `初始化失败（${stage}，参考编号：${incidentId}）`, errors: {} as FieldErrors };
 }
 
 export default function Setup({ loaderData, actionData }: Route.ComponentProps) {
