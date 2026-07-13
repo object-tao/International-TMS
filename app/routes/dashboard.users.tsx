@@ -6,11 +6,11 @@ import { hashPassword } from "../lib/crypto.server";
 import { validateEmail, validatePassword, valueOf, type FieldErrors } from "../lib/validation";
 import { writeAudit } from "../lib/audit.server";
 
-type MemberRow = { membership_id: string; user_id: string; display_name: string; email: string; title: string | null; status: string; roles: string | null; last_login_at: string | null };
+type MemberRow = { membership_id: string; user_id: string; display_name: string; email: string; title: string | null; status: string; roles: string | null; role_ids: string | null; last_login_at: string | null };
 
 export async function loader({ request }: Route.LoaderArgs) {
   const current = await requireSessionUser(request, "user.view");
-  const members = await env.DB.prepare(`SELECT m.id AS membership_id, u.id AS user_id, u.display_name, u.email, m.title, m.status, u.last_login_at, GROUP_CONCAT(r.name, '、') AS roles FROM memberships m JOIN users u ON u.id = m.user_id LEFT JOIN membership_roles mr ON mr.membership_id = m.id LEFT JOIN roles r ON r.id = mr.role_id WHERE m.organization_id = ? GROUP BY m.id ORDER BY u.display_name`).bind(current.organizationId).all<MemberRow>();
+  const members = await env.DB.prepare(`SELECT m.id AS membership_id, u.id AS user_id, u.display_name, u.email, m.title, m.status, u.last_login_at, GROUP_CONCAT(r.name, '、') AS roles, GROUP_CONCAT(r.id) AS role_ids FROM memberships m JOIN users u ON u.id = m.user_id LEFT JOIN membership_roles mr ON mr.membership_id = m.id LEFT JOIN roles r ON r.id = mr.role_id WHERE m.organization_id = ? GROUP BY m.id ORDER BY u.display_name`).bind(current.organizationId).all<MemberRow>();
   const roles = await env.DB.prepare("SELECT id, name FROM roles WHERE organization_id = ? ORDER BY name").bind(current.organizationId).all<{ id: string; name: string }>();
   return { current, members: members.results, roles: roles.results };
 }
@@ -19,6 +19,17 @@ export async function action({ request }: Route.ActionArgs) {
   const current = await requireSessionUser(request, "user.manage");
   const form = await request.formData();
   const intent = valueOf(form, "intent");
+  if (intent === "role") {
+    const membershipId = valueOf(form, "membershipId"), roleId = valueOf(form, "roleId");
+    const valid = await env.DB.prepare("SELECT m.id FROM memberships m JOIN roles r ON r.organization_id = m.organization_id WHERE m.id = ? AND r.id = ? AND m.organization_id = ?").bind(membershipId, roleId, current.organizationId).first();
+    if (!valid) return { formError: "成员或角色无效" };
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM membership_roles WHERE membership_id = ?").bind(membershipId),
+      env.DB.prepare("INSERT INTO membership_roles (membership_id, role_id) VALUES (?, ?)").bind(membershipId, roleId),
+    ]);
+    await writeAudit({ request, action: "membership.role.assign", resourceType: "membership", resourceId: membershipId, organizationId: current.organizationId, actorUserId: current.userId, metadata: { roleId } });
+    return { success: "成员角色已更新" };
+  }
   if (intent === "toggle") {
     const membershipId = valueOf(form, "membershipId");
     const membership = await env.DB.prepare("SELECT user_id, status FROM memberships WHERE id = ? AND organization_id = ?").bind(membershipId, current.organizationId).first<{ user_id: string; status: string }>();
@@ -60,6 +71,6 @@ export default function Users({ loaderData, actionData }: Route.ComponentProps) 
   return <><header className="page-header"><div><p className="eyebrow">IDENTITY</p><h1>用户管理</h1><p>管理当前组织的成员、岗位和状态。</p></div></header>
     {(actionData?.success || actionData?.formError) && <div className={`alert ${actionData.formError ? "error" : "success"}`}>{actionData.formError ?? actionData.success}</div>}
     {loaderData.current.permissions.includes("user.manage") && <section className="panel"><h2>创建用户</h2><Form method="post" className="form-grid compact"><input type="hidden" name="intent" value="create"/><label className="field"><span>姓名</span><input name="displayName" required defaultValue={actionData?.values?.displayName}/>{actionData?.errors?.displayName && <small className="field-error">{actionData.errors.displayName}</small>}</label><label className="field"><span>邮箱</span><input name="email" type="email" required defaultValue={actionData?.values?.email}/>{actionData?.errors?.email && <small className="field-error">{actionData.errors.email}</small>}</label><label className="field"><span>岗位</span><input name="title" defaultValue={actionData?.values?.title}/></label><label className="field"><span>角色</span><select name="roleId" required defaultValue={actionData?.values?.roleId}><option value="">请选择</option>{loaderData.roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>{actionData?.errors?.roleId && <small className="field-error">{actionData.errors.roleId}</small>}</label><label className="field span-2"><span>初始密码</span><input name="password" type="password" required/><small className={actionData?.errors?.password ? "field-error" : ""}>{actionData?.errors?.password ?? "至少 12 位，包含大小写字母和数字"}</small></label><button className="primary" disabled={busy}>创建用户</button></Form></section>}
-    <section className="panel"><h2>组织成员</h2><div className="table-wrap"><table><thead><tr><th>成员</th><th>岗位</th><th>角色</th><th>最近登录</th><th>状态</th><th></th></tr></thead><tbody>{loaderData.members.map(m => <tr key={m.membership_id}><td><strong>{m.display_name}</strong><small>{m.email}</small></td><td>{m.title || "—"}</td><td>{m.roles || "未分配"}</td><td>{m.last_login_at ? new Date(m.last_login_at).toLocaleString("zh-CN") : "从未"}</td><td><span className={`status-pill ${m.status !== "active" ? "off" : ""}`}>{m.status === "active" ? "有效" : "已停用"}</span></td><td>{loaderData.current.permissions.includes("user.manage") && m.user_id !== loaderData.current.userId && <Form method="post"><input type="hidden" name="intent" value="toggle"/><input type="hidden" name="membershipId" value={m.membership_id}/><button className="text-button">{m.status === "active" ? "停用" : "恢复"}</button></Form>}</td></tr>)}</tbody></table></div></section>
+    <section className="panel"><h2>组织成员</h2><div className="table-wrap"><table><thead><tr><th>成员</th><th>岗位</th><th>角色</th><th>最近登录</th><th>状态</th><th></th></tr></thead><tbody>{loaderData.members.map(m => <tr key={m.membership_id}><td><strong>{m.display_name}</strong><small>{m.email}</small></td><td>{m.title || "—"}</td><td>{loaderData.current.permissions.includes("user.manage") ? <Form method="post" className="inline-form"><input type="hidden" name="intent" value="role"/><input type="hidden" name="membershipId" value={m.membership_id}/><select name="roleId" defaultValue={m.role_ids?.split(",")[0] || ""}>{loaderData.roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}</select><button className="text-button">分配</button></Form> : m.roles || "未分配"}</td><td>{m.last_login_at ? new Date(m.last_login_at).toLocaleString("zh-CN") : "从未"}</td><td><span className={`status-pill ${m.status !== "active" ? "off" : ""}`}>{m.status === "active" ? "有效" : "已停用"}</span></td><td>{loaderData.current.permissions.includes("user.manage") && m.user_id !== loaderData.current.userId && <Form method="post"><input type="hidden" name="intent" value="toggle"/><input type="hidden" name="membershipId" value={m.membership_id}/><button className="text-button">{m.status === "active" ? "停用" : "恢复"}</button></Form>}</td></tr>)}</tbody></table></div></section>
   </>;
 }
