@@ -17,6 +17,10 @@ export default function DashboardLayout({ loaderData }: Route.ComponentProps) {
         {can("master.view") && <NavLink to="/admin/master-data">基础数据</NavLink>}
         {can("customer.view") && <NavLink to="/admin/customers">客户管理</NavLink>}
         {can("sales.view") && <NavLink to="/admin/sales">销售管理</NavLink>}
+        {can("quote.view") && <NavLink to="/admin/quotations">询价报价</NavLink>}
+        {can("order.view") && <NavLink to="/admin/orders">运输订单</NavLink>}
+        {can("shipment.view") && <NavLink to="/admin/shipments">运单轨迹</NavLink>}
+        {can("billing.view") && <NavLink to="/admin/billing">应收账单</NavLink>}
         {can("user.view") && <NavLink to="/admin/users">用户管理</NavLink>}
         {can("role.view") && <NavLink to="/admin/roles">角色权限</NavLink>}
         {can("security.manage") && <NavLink to="/admin/security">安全中心</NavLink>}

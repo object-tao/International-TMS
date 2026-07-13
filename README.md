@@ -19,10 +19,22 @@
 - Reference data for countries, currencies, units, transport modes, service levels and lead sources
 - Customer 360 records, contacts, addresses, credit terms and customer portal accounts
 - Sales leads, opportunities, pipeline stages and activities
+- Quotations with routes, cargo metrics, charge lines, tax and customer acceptance
+- Transport orders from the operations site or customer portal
+- Shipments, carriers, transport legs, customer-visible tracking events and proof of delivery
+- Accounts receivable invoices, charge lines, due dates and payment status
 - Separate operations and customer portal authentication
 - Login lockout, session monitoring and session revocation
 - Security audit trail
 - Pull-request CI and protected automatic production deployment from `main`
+
+## Phase-one workflow
+
+`Customer → Opportunity → Quotation → Transport order → Shipment → Delivery → Invoice`
+
+Each workflow uses guarded status transitions, organization-scoped authorization,
+automatic document numbering and audit events. Customer portal users can accept or
+reject quotations, submit bookings, follow shipment tracking and review issued invoices.
 
 ## Local setup
 
