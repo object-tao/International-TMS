@@ -23,6 +23,9 @@
 	"observability": {
 		"enabled": true
 	},
+	"limits": {
+		"cpu_ms": 1000
+	},
 	"upload_source_maps": true,
 	"compatibility_flags": [
 		"nodejs_compat"
